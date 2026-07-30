@@ -1,7 +1,20 @@
+"""Map a message onto the topic space the mentor roster is indexed by.
+
+Each topic has a short anchor description. Those are embedded once at startup;
+detection is then a cosine comparison against the message vector, which the caller
+supplies so a turn only pays for one embedding call.
+"""
+
+import logging
+from typing import Dict, List, Optional, Sequence
+
 import numpy as np
-from typing import List, Dict
+
 from backend.config import TOPIC_SIMILARITY_THRESHOLD
-from backend.vector_store.embedder import embed_text, embed_texts
+from backend.mentors.roster import TOPIC_DOMAINS
+from backend.vector_store.embedder import aembed_texts, embed_text, embed_texts
+
+logger = logging.getLogger(__name__)
 
 TOPIC_ANCHORS: Dict[str, str] = {
     "startup": "building a startup founding a company product market fit early stage venture",
@@ -19,37 +32,91 @@ TOPIC_ANCHORS: Dict[str, str] = {
 _anchor_vectors: Dict[str, np.ndarray] = {}
 
 
-def precompute_topic_anchors():
-    global _anchor_vectors
-    texts = list(TOPIC_ANCHORS.values())
-    topics = list(TOPIC_ANCHORS.keys())
-    embeddings = embed_texts(texts)
-    for topic, vec in zip(topics, embeddings):
-        _anchor_vectors[topic] = np.array(vec, dtype=np.float32)
-    print(f"[intent] Precomputed {len(_anchor_vectors)} topic anchor vectors.")
+def anchors_ready() -> bool:
+    return bool(_anchor_vectors)
+
+
+def _store(embeddings: Sequence[Sequence[float]]) -> None:
+    _anchor_vectors.clear()
+    for topic, vec in zip(TOPIC_ANCHORS.keys(), embeddings):
+        _anchor_vectors[topic] = np.asarray(vec, dtype=np.float32)
+    logger.info("Precomputed %d topic anchor vectors.", len(_anchor_vectors))
+
+
+def precompute_topic_anchors() -> None:
+    """Embed the topic anchors. Blocking; called from the seeding path."""
+    _store(embed_texts(list(TOPIC_ANCHORS.values())))
+
+
+async def aprecompute_topic_anchors() -> None:
+    """Embed the topic anchors without blocking the event loop."""
+    _store(await aembed_texts(list(TOPIC_ANCHORS.values())))
+
+
+def clear_anchors() -> None:
+    """Drop cached anchors, e.g. after switching embedding model."""
+    _anchor_vectors.clear()
 
 
 def _cosine_sim(a: np.ndarray, b: np.ndarray) -> float:
-    norm_a = np.linalg.norm(a)
-    norm_b = np.linalg.norm(b)
-    if norm_a == 0 or norm_b == 0:
+    norm_a = float(np.linalg.norm(a))
+    norm_b = float(np.linalg.norm(b))
+    if norm_a == 0.0 or norm_b == 0.0:
         return 0.0
     return float(np.dot(a, b) / (norm_a * norm_b))
 
 
-def detect_topics(message: str) -> List[str]:
+def topic_scores(message_vector: Sequence[float]) -> Dict[str, float]:
+    """Cosine similarity of a message against every topic anchor."""
+    if not _anchor_vectors:
+        return {}
+    msg_vec = np.asarray(message_vector, dtype=np.float32)
+    if msg_vec.size == 0:
+        return {}
+    return {
+        topic: _cosine_sim(msg_vec, anchor)
+        for topic, anchor in _anchor_vectors.items()
+    }
+
+
+def detect_topics(
+    message: str,
+    message_vector: Optional[Sequence[float]] = None,
+) -> List[str]:
+    """Return the topics a message is about, never fewer than one.
+
+    Pass `message_vector` to reuse an embedding that has already been computed.
+    """
     if not _anchor_vectors:
         precompute_topic_anchors()
 
-    msg_vec = np.array(embed_text(message), dtype=np.float32)
-    scores = {
-        topic: _cosine_sim(msg_vec, anchor_vec)
-        for topic, anchor_vec in _anchor_vectors.items()
-    }
-    detected = [t for t, s in scores.items() if s >= TOPIC_SIMILARITY_THRESHOLD]
+    if message_vector is None:
+        message_vector = embed_text(message)
 
-    # Always return at least the top topic
+    scores = topic_scores(message_vector)
+    if not scores:
+        return []
+
+    detected = sorted(
+        (t for t, s in scores.items() if s >= TOPIC_SIMILARITY_THRESHOLD),
+        key=lambda t: scores[t],
+        reverse=True,
+    )
+
+    # A message always lands somewhere; fall back to its single closest topic.
     if not detected:
-        detected = [max(scores, key=scores.get)]
+        detected = [max(scores, key=lambda t: scores[t])]
 
     return detected
+
+
+def validate_anchors() -> None:
+    """Guard against a topic being added to one of the two lists but not the other."""
+    anchors = set(TOPIC_ANCHORS)
+    domains = set(TOPIC_DOMAINS)
+    if anchors != domains:
+        raise ValueError(
+            "TOPIC_ANCHORS and TOPIC_DOMAINS disagree — "
+            f"only in anchors: {sorted(anchors - domains)}, "
+            f"only in domains: {sorted(domains - anchors)}"
+        )
