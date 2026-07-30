@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Wisdom Router</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="app">
+
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <h2>Active Perspective</h2>
+        <p class="sidebar-sub">Shifts as you talk</p>
+      </div>
+
+      <div id="weight-display" class="weight-list">
+        <!-- populated by JS -->
+      </div>
+
+      <div class="sidebar-section">
+        <h3>Topics Detected</h3>
+        <div id="topic-tags" class="topic-tags"></div>
+      </div>
+
+      <div class="sidebar-section">
+        <button id="btn-reset" class="btn-reset">New Conversation</button>
+      </div>
+    </aside>
+
+    <!-- Main Chat -->
+    <main class="main">
+
+      <header class="header">
+        <div class="header-title">
+          <span class="logo">⚡</span>
+          <h1>AI Wisdom Router</h1>
+        </div>
+        <div class="mode-toggle">
+          <button id="btn-adaptive" class="mode-btn active" data-mode="adaptive">
+            Adaptive Mentor
+          </button>
+          <button id="btn-council" class="mode-btn" data-mode="council">
+            Council Mode
+          </button>
+        </div>
+      </header>
+
+      <div id="chat-window" class="chat-window">
+        <div class="welcome">
+          <p>Ask anything. The right mind will answer.</p>
+          <p class="welcome-sub">Switch to <strong>Council Mode</strong> to hear multiple perspectives at once.</p>
+        </div>
+      </div>
+
+      <div class="input-area">
+        <textarea
+          id="user-input"
+          placeholder="What's on your mind?"
+          rows="2"
+          autofocus
+        ></textarea>
+        <button id="btn-send" class="btn-send">Send</button>
+      </div>
+
+    </main>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

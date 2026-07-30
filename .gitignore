@@ -1,0 +1,60 @@
+# ── Environment / secrets ────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+credentials.json
+serviceAccount*.json
+
+# ── Python ───────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+venv/
+env/
+.venv/
+ENV/
+.Python
+pip-wheel-metadata/
+*.egg-info/
+.eggs/
+.installed.cfg
+
+# ── Testing / coverage ───────────────────────────────────────────────
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.mypy_cache/
+.ruff_cache/
+
+# ── Build artifacts ──────────────────────────────────────────────────
+dist/
+build/
+node_modules/
+
+# ── Data stores / models / large artifacts ───────────────────────────
+qdrant_data/
+*.sqlite3
+*.db
+*.h5
+*.pt
+*.pkl
+*.ckpt
+*.onnx
+*.npy
+*.npz
+data/
+datasets/
+
+# ── Editors / OS ─────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
