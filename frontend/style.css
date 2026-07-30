@@ -422,3 +422,34 @@ body {
   from { opacity: 0; }
   to   { opacity: 1; }
 }
+
+/* ── Status banner & disabled states ──────────────────────────────── */
+
+.status-banner {
+  display: none;
+  margin: 0 24px 4px;
+  padding: 10px 14px;
+  border: 1px solid rgba(243, 156, 18, 0.45);
+  border-left: 3px solid #F39C12;
+  border-radius: 6px;
+  background: rgba(243, 156, 18, 0.08);
+  color: #F39C12;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.msg-error {
+  border-color: #E74C3C !important;
+  color: #E74C3C;
+}
+
+.btn-send:disabled,
+.mode-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+#user-input:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
