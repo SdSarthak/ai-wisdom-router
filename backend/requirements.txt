@@ -1,13 +1,12 @@
-fastapi==0.115.5
-uvicorn==0.34.0
-pydantic==2.10.4
-langchain==0.1.20
-langchain-core==0.1.52
-langchain-community==0.0.38
-qdrant-client==1.9.2
+# Runtime
+fastapi>=0.115.5,<1.0
+uvicorn[standard]>=0.34.0,<1.0
+pydantic>=2.10.4,<3.0
+qdrant-client>=1.9.2,<2.0
 numpy>=1.24.0
-scipy>=1.11.0
-python-dotenv==1.0.1
-httpx==0.28.1
-aiohttp>=3.9.0
-requests>=2.32.0
+python-dotenv>=1.0.1
+httpx>=0.27.0,<1.0
+
+# Tests
+pytest>=7.4.0
+pytest-asyncio>=0.23.0
