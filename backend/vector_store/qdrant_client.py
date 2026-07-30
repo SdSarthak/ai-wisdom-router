@@ -9,12 +9,15 @@ Three modes are supported (see QDRANT_MODE in config):
 `local` is the default so a fresh clone works with nothing but Ollama installed.
 """
 
+import logging
 import os
 from typing import Optional
 
 from qdrant_client import QdrantClient as _QdrantClient
 
 from backend.config import QDRANT_HOST, QDRANT_MODE, QDRANT_PATH, QDRANT_PORT
+
+logger = logging.getLogger(__name__)
 
 _client: Optional[_QdrantClient] = None
 
@@ -55,8 +58,10 @@ def reset_client() -> None:
     if _client is not None:
         try:
             _client.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            # Already closed, or the on-disk lock was released underneath us —
+            # either way the goal is just to drop the reference.
+            logger.debug("Ignoring error while closing Qdrant client: %s", exc)
     _client = None
 
 
