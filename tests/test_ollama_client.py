@@ -28,6 +28,35 @@ def test_text_without_thinking_is_untouched():
     assert oc.strip_thinking("  Plain answer.  ") == "Plain answer."
 
 
+def test_unterminated_thinking_block_is_not_leaked():
+    """A completion cut off mid-reasoning is all scratchpad, not an answer."""
+    assert oc.strip_thinking("<think>the user probably means") == ""
+
+
+def test_answer_before_an_unterminated_block_is_kept():
+    raw = "Do the hard thing.<think>should I add a caveat"
+    assert oc.strip_thinking(raw) == "Do the hard thing."
+
+
+def test_pairs_are_removed_before_the_unclosed_check():
+    raw = "<think>first</think>Real answer.<think>second thought"
+    assert oc.strip_thinking(raw) == "Real answer."
+
+
+def test_reasoning_only_completion_does_not_blame_a_missing_model(monkeypatch):
+    """Telling the reader to pull a model they already have wastes their time."""
+    def handler(url, payload):
+        return httpx.Response(
+            200,
+            json={"message": {"content": "<think>still deliberating"}},
+            request=httpx.Request("POST", url),
+        )
+
+    _mock_post(monkeypatch, handler)
+    with pytest.raises(oc.OllamaError, match="only reasoning"):
+        oc.generate("SYS", "hi")
+
+
 # ── Message assembly ─────────────────────────────────────────────────
 
 def test_system_prompt_comes_first_and_message_last():
@@ -164,6 +193,145 @@ def test_embed_of_nothing_makes_no_request(monkeypatch):
 
     _mock_post(monkeypatch, handler)
     assert oc.embed([]) == []
+
+
+def test_embed_does_not_retry_every_text_when_ollama_is_down(monkeypatch):
+    """A transport failure is not a missing endpoint.
+
+    Retrying per text would cost len(texts) x EMBED_TIMEOUT_SECONDS before
+    reporting the same connection error that the first call already proved.
+    """
+    calls = []
+
+    def handler(url, payload):
+        calls.append(url)
+        raise httpx.ConnectError("refused", request=httpx.Request("POST", url))
+
+    _mock_post(monkeypatch, handler)
+    with pytest.raises(oc.OllamaError, match="Could not reach Ollama"):
+        oc.embed(["a", "b", "c", "d"])
+    assert calls == [calls[0]]
+    assert calls[0].endswith("/api/embed")
+
+
+def test_embed_does_not_fall_back_on_a_server_error(monkeypatch):
+    calls = []
+
+    def handler(url, payload):
+        calls.append(url)
+        return httpx.Response(500, text="boom", request=httpx.Request("POST", url))
+
+    _mock_post(monkeypatch, handler)
+    with pytest.raises(oc.OllamaError, match="500"):
+        oc.embed(["a", "b"])
+    assert len(calls) == 1
+
+
+def test_http_status_errors_carry_their_status_code(monkeypatch):
+    def handler(url, payload):
+        return httpx.Response(404, text="nope", request=httpx.Request("POST", url))
+
+    _mock_post(monkeypatch, handler)
+    with pytest.raises(oc.OllamaError) as excinfo:
+        oc.generate("SYS", "hi")
+    assert excinfo.value.status_code == 404
+
+
+def test_transport_errors_have_no_status_code(monkeypatch):
+    def handler(url, payload):
+        raise httpx.ConnectError("refused", request=httpx.Request("POST", url))
+
+    _mock_post(monkeypatch, handler)
+    with pytest.raises(oc.OllamaError) as excinfo:
+        oc.generate("SYS", "hi")
+    assert excinfo.value.status_code is None
+
+
+# ── Async transport ──────────────────────────────────────────────────
+
+def _mock_apost(monkeypatch, handler):
+    class _FakeAsyncClient:
+        def __init__(self, timeout=None):
+            self.timeout = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc_info):
+            return False
+
+        async def post(self, url, json=None):
+            return handler(url, json)
+
+    monkeypatch.setattr(oc.httpx, "AsyncClient", _FakeAsyncClient)
+
+
+async def test_aembed_uses_the_batch_endpoint(monkeypatch):
+    seen = {}
+
+    def handler(url, payload):
+        seen["url"] = url
+        return httpx.Response(
+            200,
+            json={"embeddings": [[0.1], [0.2]]},
+            request=httpx.Request("POST", url),
+        )
+
+    _mock_apost(monkeypatch, handler)
+    assert await oc.aembed(["a", "b"]) == [[0.1], [0.2]]
+    assert seen["url"].endswith("/api/embed")
+
+
+async def test_aembed_falls_back_to_the_single_prompt_endpoint(monkeypatch):
+    """Every chat turn embeds through aembed; without the fallback the whole
+    app is unusable on Ollama < 0.3.4 even though seeding works."""
+    calls = []
+
+    def handler(url, payload):
+        calls.append(url)
+        if url.endswith("/api/embed"):
+            return httpx.Response(404, text="not found", request=httpx.Request("POST", url))
+        return httpx.Response(
+            200, json={"embedding": [1.0, 2.0]}, request=httpx.Request("POST", url)
+        )
+
+    _mock_apost(monkeypatch, handler)
+    assert await oc.aembed(["a", "b"]) == [[1.0, 2.0], [1.0, 2.0]]
+    assert sum(1 for u in calls if u.endswith("/api/embeddings")) == 2
+
+
+async def test_aembed_does_not_retry_every_text_when_ollama_is_down(monkeypatch):
+    calls = []
+
+    def handler(url, payload):
+        calls.append(url)
+        raise httpx.ConnectError("refused", request=httpx.Request("POST", url))
+
+    _mock_apost(monkeypatch, handler)
+    with pytest.raises(oc.OllamaError, match="Could not reach Ollama"):
+        await oc.aembed(["a", "b", "c"])
+    assert len(calls) == 1
+
+
+async def test_aembed_of_nothing_makes_no_request(monkeypatch):
+    def handler(url, payload):
+        raise AssertionError("should not have called Ollama")
+
+    _mock_apost(monkeypatch, handler)
+    assert await oc.aembed([]) == []
+
+
+async def test_agenerate_strips_reasoning(monkeypatch):
+    def handler(url, payload):
+        assert url.endswith("/api/chat")
+        return httpx.Response(
+            200,
+            json={"message": {"content": "<think>hmm</think>Do it now."}},
+            request=httpx.Request("POST", url),
+        )
+
+    _mock_apost(monkeypatch, handler)
+    assert await oc.agenerate("SYS", "when?") == "Do it now."
 
 
 def test_ping_reports_unreachable(monkeypatch):

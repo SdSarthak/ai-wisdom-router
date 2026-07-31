@@ -29,7 +29,21 @@ _ROLE_MAP = {"human": "user", "user": "user", "assistant": "assistant"}
 
 
 class OllamaError(RuntimeError):
-    """Ollama is unreachable, timed out, or returned an unusable response."""
+    """Ollama is unreachable, timed out, or returned an unusable response.
+
+    `status_code` is set when the failure was an HTTP status rather than a
+    transport error, so callers can tell "this endpoint does not exist on this
+    Ollama version" apart from "Ollama is not answering at all".
+    """
+
+    def __init__(self, message: str, status_code: Optional[int] = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
+# Statuses that mean "this Ollama build does not serve that route" — the only
+# case in which falling back to an older endpoint is the right move.
+_ENDPOINT_MISSING = frozenset({404, 405, 501})
 
 
 def strip_thinking(text: str) -> str:
@@ -38,6 +52,12 @@ def strip_thinking(text: str) -> str:
     # A truncated or unopened block can leave a closing tag with no opener.
     if "</think>" in cleaned:
         cleaned = _ORPHAN_THINK.sub("", cleaned)
+    # An opener with no closer means generation was cut off mid-reasoning.
+    # Everything from that point on is scratchpad; returning it would render
+    # the model's private deliberation to the user as if it were the answer.
+    opener = cleaned.lower().find("<think>")
+    if opener != -1:
+        cleaned = cleaned[:opener]
     return cleaned.strip()
 
 
@@ -63,7 +83,8 @@ def _wrap_http_error(exc: Exception, url: str, path: str) -> "OllamaError":
     if isinstance(exc, httpx.HTTPStatusError):
         return OllamaError(
             f"Ollama returned {exc.response.status_code} for {path}: "
-            f"{exc.response.text[:200]}"
+            f"{exc.response.text[:200]}",
+            status_code=exc.response.status_code,
         )
     if isinstance(exc, httpx.HTTPError):
         return OllamaError(f"Could not reach Ollama at {url}: {exc}")
@@ -103,9 +124,18 @@ def _chat_payload(messages: List[Dict[str, str]]) -> Dict[str, Any]:
 
 
 def _extract_content(data: Dict[str, Any]) -> str:
-    content = (data.get("message") or {}).get("content", "")
+    content = (data.get("message") or {}).get("content", "") or ""
     text = strip_thinking(content) if content else ""
     if not text:
+        if "<think>" in content.lower():
+            # The model spent its whole budget reasoning and never reached an
+            # answer. Saying "is the model pulled?" here would send the reader
+            # chasing the wrong problem.
+            raise OllamaError(
+                f"{LLM_MODEL!r} produced only reasoning and no answer — the "
+                "completion was cut short. Raise LLM_TIMEOUT_SECONDS, or "
+                "configure LLM_MODEL to a model without a reasoning scratchpad."
+            )
         raise OllamaError(
             f"Ollama returned an empty completion for model {LLM_MODEL!r}. "
             f"Is the model pulled? Try: ollama pull {LLM_MODEL}"
@@ -148,13 +178,28 @@ def _parse_embeddings(data: Dict[str, Any], expected: int) -> List[List[float]]:
     return vectors
 
 
+def _legacy_payload(text: str) -> Dict[str, Any]:
+    return {"model": EMBEDDING_MODEL, "prompt": text}
+
+
 def _embed_one(text: str) -> List[float]:
-    data = _post(
-        "/api/embeddings",
-        {"model": EMBEDDING_MODEL, "prompt": text},
-        EMBED_TIMEOUT_SECONDS,
-    )
+    data = _post("/api/embeddings", _legacy_payload(text), EMBED_TIMEOUT_SECONDS)
     return _parse_embeddings(data, 1)[0]
+
+
+async def _aembed_one(text: str) -> List[float]:
+    data = await _apost("/api/embeddings", _legacy_payload(text), EMBED_TIMEOUT_SECONDS)
+    return _parse_embeddings(data, 1)[0]
+
+
+def _should_fall_back(exc: OllamaError) -> bool:
+    """Only retry on the legacy endpoint when the batch route is genuinely absent.
+
+    Falling back on *any* failure turns one unreachable host into one request
+    per text, each waiting out EMBED_TIMEOUT_SECONDS — seeding the corpus would
+    hang for len(quotes) x timeout before reporting the same connection error.
+    """
+    return exc.status_code in _ENDPOINT_MISSING
 
 
 def embed(texts: List[str]) -> List[List[float]]:
@@ -164,18 +209,30 @@ def embed(texts: List[str]) -> List[List[float]]:
     payload = {"model": EMBEDDING_MODEL, "input": texts}
     try:
         data = _post("/api/embed", payload, EMBED_TIMEOUT_SECONDS)
-    except OllamaError:
+    except OllamaError as exc:
         # Ollama < 0.3.4 only exposes the single-prompt /api/embeddings endpoint.
+        if not _should_fall_back(exc):
+            raise
         return [_embed_one(t) for t in texts]
     return _parse_embeddings(data, len(texts))
 
 
 async def aembed(texts: List[str]) -> List[List[float]]:
-    """Async batch embedding."""
+    """Async batch embedding.
+
+    Carries the same legacy fallback as `embed`: without it every chat turn
+    fails on an Ollama older than 0.3.4 even though seeding, which takes the
+    blocking path, succeeds.
+    """
     if not texts:
         return []
     payload = {"model": EMBEDDING_MODEL, "input": texts}
-    data = await _apost("/api/embed", payload, EMBED_TIMEOUT_SECONDS)
+    try:
+        data = await _apost("/api/embed", payload, EMBED_TIMEOUT_SECONDS)
+    except OllamaError as exc:
+        if not _should_fall_back(exc):
+            raise
+        return [await _aembed_one(t) for t in texts]
     return _parse_embeddings(data, len(texts))
 
 
