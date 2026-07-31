@@ -72,14 +72,41 @@ def test_clear_session_reports_whether_it_existed():
 def test_cleared_session_returns_to_defaults():
     store.update_session("s1", {"weight_display": {"paul_graham": 1.0}})
     store.clear_session("s1")
-    assert set(store.get_session_weights("s1")) == set(MENTORS)
+    assert set(store.peek_session_weights("s1")) == set(MENTORS)
 
 
-def test_get_history_returns_the_tail():
-    for i in range(6):
-        store.update_session("s1", {"messages": [{"role": "human", "content": str(i)}]})
-    assert [m["content"] for m in store.get_history("s1", 2)] == ["4", "5"]
-    assert store.get_history("s1", 0) == []
+# ── Reads must not allocate ──────────────────────────────────────────
+
+def test_peeking_weights_does_not_create_a_session():
+    assert store.session_count() == 0
+    assert set(store.peek_session_weights("never-seen")) == set(MENTORS)
+    assert store.session_count() == 0
+
+
+def test_peeking_returns_the_stored_distribution():
+    store.update_session("s1", {"weight_display": {"paul_graham": 1.0}})
+    assert store.peek_session_weights("s1") == {"paul_graham": 1.0}
+
+
+def test_peeking_cannot_evict_a_live_session(monkeypatch):
+    """The weights route is unauthenticated; if reading allocated, anyone could
+    push every real conversation out of the LRU with MAX_SESSIONS requests."""
+    monkeypatch.setattr(store, "MAX_SESSIONS", 3)
+    store.update_session("real", {"response": "important"})
+    for i in range(50):
+        store.peek_session_weights(f"attacker-{i}")
+    assert store.session_count() == 1
+    assert store.get_session("real")["response"] == "important"
+
+
+def test_peeking_marks_a_known_session_recently_used(monkeypatch):
+    monkeypatch.setattr(store, "MAX_SESSIONS", 2)
+    store.get_session("a")
+    store.get_session("b")
+    store.peek_session_weights("a")
+    store.get_session("c")  # evicts b, not a
+    assert store.clear_session("b") is False
+    assert store.clear_session("a") is True
 
 
 def test_update_creates_a_missing_session():

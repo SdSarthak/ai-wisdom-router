@@ -8,7 +8,7 @@ server cannot grow without limit.
 
 import threading
 from collections import OrderedDict
-from typing import Dict, List
+from typing import Dict
 
 from backend.config import MAX_HISTORY_MESSAGES, MAX_SESSIONS
 from backend.graph.state import ConversationState
@@ -85,15 +85,20 @@ def clear_session(session_id: str) -> bool:
         return _sessions.pop(session_id, None) is not None
 
 
-def get_session_weights(session_id: str) -> Dict[str, float]:
-    return dict(get_session(session_id).get("weight_display") or initialize_weights())
+def peek_session_weights(session_id: str) -> Dict[str, float]:
+    """The stored distribution for a session, without creating one.
 
-
-def get_history(session_id: str, limit: int) -> List[Dict[str, str]]:
-    """The most recent `limit` turns, oldest first."""
-    if limit <= 0:
-        return []
-    return list(get_session(session_id).get("messages", []))[-limit:]
+    Read paths must not allocate: `/api/session/{id}/weights` is unauthenticated,
+    so creating on read would let anyone mint MAX_SESSIONS entries and evict every
+    real conversation from the LRU. An unknown session simply reads as the even
+    split a new conversation would start from.
+    """
+    with _lock:
+        session = _sessions.get(session_id)
+        if session is None:
+            return initialize_weights()
+        _sessions.move_to_end(session_id)
+        return dict(session.get("weight_display") or initialize_weights())
 
 
 def session_count() -> int:

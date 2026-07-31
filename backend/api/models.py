@@ -20,6 +20,16 @@ class ChatRequest(BaseModel):
             raise ValueError("message must not be empty")
         return stripped
 
+    @field_validator("session_id")
+    @classmethod
+    def _usable_session_id(cls, value: str) -> str:
+        # min_length alone accepts "   ", which would key a real conversation on
+        # whitespace and collide with every other client that sends blanks.
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("session_id must not be blank")
+        return stripped
+
 
 class MentorInfo(BaseModel):
     id: str

@@ -2,7 +2,7 @@
 
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Path
 
 from backend.api.models import (
     ChatRequest,
@@ -15,7 +15,7 @@ from backend.api.models import (
 )
 from backend.graph.adaptive_graph import run_adaptive
 from backend.graph.council_graph import run_council
-from backend.graph.memory_store import clear_session, get_session_weights, session_count
+from backend.graph.memory_store import clear_session, peek_session_weights, session_count
 from backend.llm.ollama_client import OllamaError
 from backend.llm.ollama_client import ping as ollama_ping
 from backend.mentors.roster import MENTORS
@@ -74,17 +74,24 @@ async def chat(request: ChatRequest) -> ChatResponse:
         raise HTTPException(status_code=500, detail=f"Internal error: {exc}") from exc
 
 
+# Both session routes take an id straight off the URL. Bounding it here keeps an
+# oversized path segment from becoming a dictionary key in the session store.
+SessionIdPath = Path(..., min_length=1, max_length=128)
+
+
 @router.get("/session/{session_id}/weights", response_model=SessionWeightsResponse)
-async def get_weights(session_id: str) -> SessionWeightsResponse:
+async def get_weights(session_id: str = SessionIdPath) -> SessionWeightsResponse:
     return SessionWeightsResponse(
         session_id=session_id,
-        mentor_weights=get_session_weights(session_id),
+        # Peek, never create: this route is unauthenticated, and allocating on
+        # read would let anyone flush live conversations out of the LRU.
+        mentor_weights=peek_session_weights(session_id),
         mentor_names=_MENTOR_NAMES,
     )
 
 
 @router.delete("/session/{session_id}", response_model=SessionClearedResponse)
-async def reset_session(session_id: str) -> SessionClearedResponse:
+async def reset_session(session_id: str = SessionIdPath) -> SessionClearedResponse:
     return SessionClearedResponse(
         session_id=session_id, existed=clear_session(session_id)
     )

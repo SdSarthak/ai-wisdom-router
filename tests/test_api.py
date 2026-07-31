@@ -115,6 +115,49 @@ def test_unknown_mode_is_rejected(client):
     assert response.status_code == 422
 
 
+def test_blank_session_id_is_rejected(client):
+    response = client.post("/api/chat", json={"session_id": "   ", "message": "hi"})
+    assert response.status_code == 422
+
+
+def test_oversized_session_id_is_rejected(client):
+    response = client.post(
+        "/api/chat", json={"session_id": "x" * 5000, "message": "hi"}
+    )
+    assert response.status_code == 422
+
+
+def test_oversized_message_is_rejected(client):
+    response = client.post(
+        "/api/chat", json={"session_id": "s1", "message": "x" * 20000}
+    )
+    assert response.status_code == 422
+
+
+def test_oversized_session_id_in_the_path_is_rejected(client):
+    assert client.get(f"/api/session/{'x' * 500}/weights").status_code == 422
+    assert client.delete(f"/api/session/{'x' * 500}").status_code == 422
+
+
+def test_unicode_message_survives_the_round_trip(client, stub_llm):
+    message = "如何建立财富? 🚀 ¿Y la disciplina?"
+    response = client.post(
+        "/api/chat", json={"session_id": "s1", "message": message}
+    )
+    assert response.status_code == 200
+    assert stub_llm[-1]["user_message"] == message
+
+
+def test_reading_weights_does_not_create_sessions(client):
+    """An unauthenticated read that allocated would be an eviction lever."""
+    from backend.graph.memory_store import session_count
+
+    before = session_count()
+    for i in range(25):
+        assert client.get(f"/api/session/probe-{i}/weights").status_code == 200
+    assert session_count() == before
+
+
 def test_backend_outage_returns_503(client, monkeypatch):
     from backend.llm.ollama_client import OllamaError
 
