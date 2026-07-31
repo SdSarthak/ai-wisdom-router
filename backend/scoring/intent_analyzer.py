@@ -37,10 +37,30 @@ def anchors_ready() -> bool:
 
 
 def _store(embeddings: Sequence[Sequence[float]]) -> None:
-    _anchor_vectors.clear()
-    for topic, vec in zip(TOPIC_ANCHORS.keys(), embeddings):
-        _anchor_vectors[topic] = np.asarray(vec, dtype=np.float32)
-    logger.info("Precomputed %d topic anchor vectors.", len(_anchor_vectors))
+    """Publish a complete anchor set, or none at all.
+
+    Two things matter here. The set is built first and swapped in with a single
+    rebind, so a request running concurrently with a rebuild reads either the old
+    map or the new one but never a half-populated one — `zip` against a partial
+    map would silently make some topics undetectable. And a short embedding batch
+    is rejected rather than zipped away, for the same reason.
+    """
+    global _anchor_vectors
+
+    expected = len(TOPIC_ANCHORS)
+    vectors = list(embeddings)
+    if len(vectors) != expected:
+        raise ValueError(
+            f"Expected {expected} topic anchor embeddings, got {len(vectors)}. "
+            "Topic detection would silently ignore the missing topics."
+        )
+
+    built = {
+        topic: np.asarray(vec, dtype=np.float32)
+        for topic, vec in zip(TOPIC_ANCHORS.keys(), vectors)
+    }
+    _anchor_vectors = built
+    logger.info("Precomputed %d topic anchor vectors.", len(built))
 
 
 def precompute_topic_anchors() -> None:
@@ -55,7 +75,8 @@ async def aprecompute_topic_anchors() -> None:
 
 def clear_anchors() -> None:
     """Drop cached anchors, e.g. after switching embedding model."""
-    _anchor_vectors.clear()
+    global _anchor_vectors
+    _anchor_vectors = {}
 
 
 def _cosine_sim(a: np.ndarray, b: np.ndarray) -> float:

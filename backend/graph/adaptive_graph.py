@@ -6,6 +6,7 @@ Pipeline for a turn:
   -> generate -> persist.
 """
 
+import asyncio
 import logging
 
 from backend.config import COUNCIL_TOP_N
@@ -34,7 +35,10 @@ async def run_adaptive(session_id: str, user_message: str) -> ConversationState:
         await aprecompute_topic_anchors()
     detected_topics = detect_topics(user_message, message_vector=query_vector)
 
-    scoring = score_all_mentors(query_vector, detected_topics)
+    # One filtered vector search per mentor, all of it blocking (local Qdrant
+    # reads from disk, server mode from a socket). Keep it off the event loop so
+    # concurrent conversations do not queue behind each other's retrieval.
+    scoring = await asyncio.to_thread(score_all_mentors, query_vector, detected_topics)
 
     new_weights = blend_weights(
         old_weights=state["mentor_weights"],
@@ -71,6 +75,9 @@ async def run_adaptive(session_id: str, user_message: str) -> ConversationState:
                 {"role": "human", "content": user_message},
                 {"role": "assistant", "content": response},
             ],
-            "topic_history": detected_topics,
+            # One entry per turn — the leading topic. Appending every detected
+            # topic swamps the trajectory window (see _trajectory_bonus) and
+            # makes the trajectory bonus unreachable.
+            "topic_history": detected_topics[:1],
         },
     )

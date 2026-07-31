@@ -1,5 +1,6 @@
 """HTTP surface for the wisdom router."""
 
+import asyncio
 import logging
 
 from fastapi import APIRouter, HTTPException, Path
@@ -112,8 +113,14 @@ async def list_mentors() -> dict:
 
 @router.get("/health", response_model=HealthResponse)
 async def health() -> HealthResponse:
-    ollama = ollama_ping()
-    store = qdrant_ping()
+    # Both probes are blocking: Ollama over HTTP with a multi-second timeout, and
+    # Qdrant against local disk. Run on worker threads so an unreachable-but-not-
+    # refusing Ollama stalls this request only, not every other request in flight —
+    # the frontend polls this endpoint precisely when the backend is unwell.
+    ollama, store = await asyncio.gather(
+        asyncio.to_thread(ollama_ping),
+        asyncio.to_thread(qdrant_ping),
+    )
     healthy = (
         ollama.get("reachable")
         and ollama.get("llm_model_available")

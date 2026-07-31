@@ -84,6 +84,30 @@ def test_cosine_sim_handles_zero_vectors():
     assert ia._cosine_sim(other, other) == pytest.approx(1.0)
 
 
+def test_a_short_embedding_batch_is_rejected_not_zipped_away():
+    """zip() would drop the tail topics and leave them permanently undetectable."""
+    with pytest.raises(ValueError, match="topic anchor embeddings"):
+        ia._store([[0.0] * 4] * (len(ia.TOPIC_ANCHORS) - 1))
+
+
+def test_a_failed_rebuild_leaves_the_previous_anchors_intact():
+    ia.precompute_topic_anchors()
+    previous = ia._anchor_vectors
+    with pytest.raises(ValueError):
+        ia._store([[0.0] * 4])
+    assert ia._anchor_vectors is previous
+    assert set(ia._anchor_vectors) == set(ia.TOPIC_ANCHORS)
+
+
+def test_rebuilding_swaps_the_map_atomically():
+    """Readers must see the old map or the new one, never a half-filled one."""
+    ia.precompute_topic_anchors()
+    first = ia._anchor_vectors
+    ia.precompute_topic_anchors()
+    assert ia._anchor_vectors is not first
+    assert set(ia._anchor_vectors) == set(ia.TOPIC_ANCHORS)
+
+
 def test_validate_anchors_rejects_a_mismatch(monkeypatch):
     monkeypatch.setitem(ia.TOPIC_ANCHORS, "cooking", "making food in a kitchen")
     with pytest.raises(ValueError, match="cooking"):

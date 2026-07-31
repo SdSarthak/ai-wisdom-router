@@ -16,7 +16,7 @@ class ConversationState(TypedDict):
 
     # Accumulated across turns
     messages: List[Dict[str, str]]
-    topic_history: List[str]
+    topic_history: List[str]   # one entry per turn: that turn's leading topic
 
     # Adaptive mode — the evolving distribution that carries between turns
     mentor_weights: Dict[str, float]

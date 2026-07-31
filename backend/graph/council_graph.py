@@ -55,7 +55,8 @@ async def run_council(session_id: str, user_message: str) -> ConversationState:
         await aprecompute_topic_anchors()
     detected_topics = detect_topics(user_message, message_vector=query_vector)
 
-    scoring = score_all_mentors(query_vector, detected_topics)
+    # Blocking vector search — see the same call in adaptive_graph.
+    scoring = await asyncio.to_thread(score_all_mentors, query_vector, detected_topics)
     selected: List[str] = [
         mid
         for mid in select_council_mentors(scoring.scores, top_n=COUNCIL_TOP_N)
@@ -110,6 +111,7 @@ async def run_council(session_id: str, user_message: str) -> ConversationState:
                 {"role": "human", "content": user_message},
                 {"role": "assistant", "content": _digest(council_responses)},
             ],
-            "topic_history": detected_topics,
+            # One entry per turn; see the same note in adaptive_graph.
+            "topic_history": detected_topics[:1],
         },
     )

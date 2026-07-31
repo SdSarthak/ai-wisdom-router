@@ -33,8 +33,14 @@ def _round_and_sort(weights: Dict[str, float]) -> Dict[str, float]:
 def _trajectory_bonus(topic_history: Sequence[str]) -> Dict[str, float]:
     """Reward specialists when the conversation keeps circling one topic.
 
-    Looks at the last two windows of topics; any topic appearing at least
-    TRAJECTORY_WINDOW times is treated as the conversation's current direction.
+    `topic_history` holds **one entry per turn** — the turn's leading topic. That
+    is what makes the window meaningful: if a turn contributed every topic it
+    detected, three topics on a single turn would fill the whole window with two
+    turns' worth of entries and no topic could ever reach TRAJECTORY_WINDOW
+    occurrences, so the bonus would never fire at all.
+
+    Any topic appearing at least TRAJECTORY_WINDOW times across the last two
+    windows of turns is treated as the conversation's current direction.
     """
     recent = list(topic_history[-TRAJECTORY_WINDOW * 2 :])
     if len(recent) < TRAJECTORY_WINDOW:
