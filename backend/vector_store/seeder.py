@@ -7,12 +7,14 @@ Run directly to (re)build the collection:
 """
 
 import logging
+import uuid
 from typing import List
 
 from qdrant_client.models import (
     Distance,
     FieldCondition,
     Filter,
+    FilterSelector,
     MatchValue,
     PointStruct,
     VectorParams,
@@ -29,6 +31,21 @@ logger = logging.getLogger(__name__)
 # Quotes are short; one request per mentor keeps Ollama busy without
 # building a payload large enough to trip its request size limits.
 EMBED_BATCH_SIZE = 32
+
+# Fixed namespace for deriving point ids. Ids must depend on the mentor and the
+# mentor's own quote index only — never on the mentor's position in SEED_DATA,
+# which changes the moment a mentor is added, removed or reordered.
+_POINT_NAMESPACE = uuid.UUID("8f2a4f7c-0b3d-5e6a-9c11-4d7e3a2b6c58")
+
+
+def _point_id(mentor_id: str, index: int) -> str:
+    return str(uuid.uuid5(_POINT_NAMESPACE, f"{mentor_id}:{index}"))
+
+
+def _mentor_filter(mentor_id: str) -> Filter:
+    return Filter(
+        must=[FieldCondition(key="mentor_id", match=MatchValue(value=mentor_id))]
+    )
 
 
 def _batched(items: List, size: int):
@@ -66,9 +83,7 @@ def ensure_collection(client, recreate: bool = False) -> None:
 def _mentor_point_count(client, mentor_id: str) -> int:
     return client.count(
         collection_name=QDRANT_COLLECTION,
-        count_filter=Filter(
-            must=[FieldCondition(key="mentor_id", match=MatchValue(value=mentor_id))]
-        ),
+        count_filter=_mentor_filter(mentor_id),
         exact=True,
     ).count
 
@@ -83,23 +98,31 @@ def seed_mentor_knowledge(force: bool = False) -> int:
     ensure_collection(client, recreate=force)
 
     written = 0
-    point_id = 0
 
     for mentor_id, quotes in SEED_DATA.items():
         if mentor_id not in MENTORS:
             logger.warning(
                 "seed_data has quotes for unknown mentor %r — skipping.", mentor_id
             )
-            point_id += len(quotes)
             continue
 
-        # Deterministic ids keep re-seeding an upsert rather than a duplicate.
-        ids = list(range(point_id + 1, point_id + 1 + len(quotes)))
-        point_id += len(quotes)
+        # Ids are derived from (mentor_id, index within that mentor's quotes), so
+        # they are stable under insertion and reordering of SEED_DATA. Running
+        # positional ids used to shift every later mentor's range, which made
+        # adding one mentor overwrite another mentor's points with the newcomer's
+        # payload — the corpus silently changed attribution.
+        ids = [_point_id(mentor_id, i) for i in range(len(quotes))]
 
         if not force and _mentor_point_count(client, mentor_id) == len(quotes):
             logger.info("%s already seeded (%d quotes) — skipping.", mentor_id, len(quotes))
             continue
+
+        # Clear first: if this mentor's corpus shrank, upserting alone would
+        # leave the dropped quotes behind as retrievable orphans.
+        client.delete(
+            collection_name=QDRANT_COLLECTION,
+            points_selector=FilterSelector(filter=_mentor_filter(mentor_id)),
+        )
 
         for id_batch, quote_batch in zip(
             _batched(ids, EMBED_BATCH_SIZE), _batched(quotes, EMBED_BATCH_SIZE)

@@ -76,6 +76,62 @@ def test_dimension_change_triggers_a_rebuild(monkeypatch):
     assert client.count(QDRANT_COLLECTION, exact=True).count == 0
 
 
+def test_adding_a_mentor_does_not_relabel_existing_points(monkeypatch):
+    """Point ids must not depend on a mentor's position in SEED_DATA.
+
+    With running positional ids, inserting a mentor shifted every later mentor's
+    id range, so the newcomer's points overwrote an existing mentor's — leaving
+    quotes attributed to the wrong person.
+    """
+    from backend.mentors.roster import Mentor
+
+    seeder.seed_mentor_knowledge()
+    client = get_qdrant_client()
+    before = {mid: seeder._mentor_point_count(client, mid) for mid in SEED_DATA}
+
+    monkeypatch.setitem(
+        seeder.MENTORS,
+        "new_voice",
+        Mentor(
+            id="new_voice",
+            display_name="New Voice",
+            domains=["career"],
+            domain_weights={"career": 1.0},
+            persona_prompt="p",
+            color="#123456",
+        ),
+    )
+    reordered = {"new_voice": [("a brand new quote", "somewhere", ["career"])]}
+    reordered.update(SEED_DATA)  # the newcomer sits ahead of everyone else
+    monkeypatch.setattr(seeder, "SEED_DATA", reordered)
+
+    seeder.seed_mentor_knowledge()
+
+    after = {mid: seeder._mentor_point_count(client, mid) for mid in SEED_DATA}
+    assert after == before
+    assert seeder._mentor_point_count(client, "new_voice") == 1
+    assert client.count(QDRANT_COLLECTION, exact=True).count == _total_quotes() + 1
+
+
+def test_shrinking_a_corpus_drops_the_stale_points(monkeypatch):
+    """Deleted quotes must stop being retrievable, not linger as orphans."""
+    seeder.seed_mentor_knowledge()
+    client = get_qdrant_client()
+
+    trimmed = dict(SEED_DATA)
+    trimmed["paul_graham"] = list(SEED_DATA["paul_graham"])[:2]
+    monkeypatch.setattr(seeder, "SEED_DATA", trimmed)
+
+    seeder.seed_mentor_knowledge()
+    assert seeder._mentor_point_count(client, "paul_graham") == 2
+
+
+def test_point_ids_are_stable_across_runs():
+    assert seeder._point_id("paul_graham", 0) == seeder._point_id("paul_graham", 0)
+    assert seeder._point_id("paul_graham", 0) != seeder._point_id("paul_graham", 1)
+    assert seeder._point_id("paul_graham", 0) != seeder._point_id("naval_ravikant", 0)
+
+
 def test_unknown_mentor_in_seed_data_is_skipped(monkeypatch):
     expected = _total_quotes()  # baseline before the bogus entry is injected
     monkeypatch.setitem(
