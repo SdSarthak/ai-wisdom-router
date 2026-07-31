@@ -64,6 +64,57 @@ def test_validate_rejects_zero_scoring_weights(monkeypatch):
         config.validate()
 
 
+@pytest.mark.parametrize(
+    "name,value",
+    [
+        # Zero or negative bounds silently invert a `list[-n:]` tail slice into
+        # "keep everything", so they must never reach the session store.
+        ("MAX_HISTORY_MESSAGES", 0),
+        ("MAX_HISTORY_MESSAGES", -5),
+        ("MAX_HISTORY_MESSAGES", 1),
+        ("MAX_SESSIONS", 0),
+        ("TRAJECTORY_WINDOW", 0),
+        ("TRAJECTORY_WINDOW", -1),
+        # Values that would fail deep inside a driver with an opaque message.
+        ("QDRANT_SEARCH_LIMIT", 0),
+        ("LLM_TIMEOUT_SECONDS", 0.0),
+        ("EMBED_TIMEOUT_SECONDS", -1.0),
+        ("PORT", 0),
+        ("PORT", 70000),
+        ("MIN_WEIGHT_THRESHOLD", 1.0),
+        ("MIN_WEIGHT_THRESHOLD", -0.1),
+        ("TOPIC_SIMILARITY_THRESHOLD", 1.5),
+        ("LLM_TEMPERATURE", -0.5),
+        ("TRAJECTORY_BONUS", -0.1),
+        ("EMBEDDING_SCORE_WEIGHT", -1.0),
+        ("CORS_ORIGINS", []),
+    ],
+)
+def test_validate_rejects_out_of_range_settings(monkeypatch, name, value):
+    monkeypatch.setattr(config, name, value)
+    with pytest.raises(ValueError):
+        config.validate()
+
+
+def test_validate_ignores_qdrant_port_when_not_in_server_mode(monkeypatch):
+    """An unused port should not block a local or in-memory deployment."""
+    monkeypatch.setattr(config, "QDRANT_MODE", "memory")
+    monkeypatch.setattr(config, "QDRANT_PORT", 0)
+    config.validate()
+
+
+def test_history_bound_actually_bounds_at_its_minimum(monkeypatch):
+    """The lower bound validate() enforces must still trim, not keep everything."""
+    from backend.graph import memory_store as store
+
+    monkeypatch.setattr(config, "MAX_HISTORY_MESSAGES", 2)
+    config.validate()
+    monkeypatch.setattr(store, "MAX_HISTORY_MESSAGES", 2)
+    for i in range(8):
+        store.update_session("bound", {"messages": [{"role": "human", "content": str(i)}]})
+    assert len(store.get_session("bound")["messages"]) == 2
+
+
 # ── Roster integrity ─────────────────────────────────────────────────
 
 def test_mentor_ids_match_their_keys():

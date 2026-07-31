@@ -105,7 +105,12 @@ SEED_ON_STARTUP = _bool("SEED_ON_STARTUP", True)
 
 
 def validate() -> None:
-    """Fail fast on configuration that would break at request time."""
+    """Fail fast on configuration that would break at request time.
+
+    Several of these guard settings whose invalid values fail *silently* rather
+    than loudly — a zero window turns a `list[-n:]` tail slice into the whole
+    list, which is the opposite of the intended bound.
+    """
     if QDRANT_MODE not in ("server", "local", "memory"):
         raise ValueError(
             f"QDRANT_MODE must be one of 'server', 'local', 'memory' — got {QDRANT_MODE!r}"
@@ -120,3 +125,45 @@ def validate() -> None:
         raise ValueError(
             "EMBEDDING_SCORE_WEIGHT + DOMAIN_SCORE_WEIGHT must be greater than 0"
         )
+    if EMBEDDING_SCORE_WEIGHT < 0 or DOMAIN_SCORE_WEIGHT < 0:
+        raise ValueError(
+            "EMBEDDING_SCORE_WEIGHT and DOMAIN_SCORE_WEIGHT must not be negative"
+        )
+
+    # MAX_HISTORY_MESSAGES <= 0 makes `combined[-MAX_HISTORY_MESSAGES:]` return
+    # the entire list, so the session store would grow without bound — exactly
+    # the failure the setting exists to prevent.
+    if MAX_HISTORY_MESSAGES < 2:
+        raise ValueError(
+            "MAX_HISTORY_MESSAGES must be at least 2 (one user turn and one reply)"
+        )
+    if MAX_SESSIONS < 1:
+        raise ValueError("MAX_SESSIONS must be at least 1")
+
+    # TRAJECTORY_WINDOW <= 0 has the same tail-slice problem, and every topic
+    # then trivially clears a count of >= 0, handing the bonus to everyone.
+    if TRAJECTORY_WINDOW < 1:
+        raise ValueError("TRAJECTORY_WINDOW must be at least 1")
+    if TRAJECTORY_BONUS < 0:
+        raise ValueError("TRAJECTORY_BONUS must not be negative")
+
+    if QDRANT_SEARCH_LIMIT < 1:
+        raise ValueError("QDRANT_SEARCH_LIMIT must be at least 1")
+    if not 0.0 <= MIN_WEIGHT_THRESHOLD < 1.0:
+        raise ValueError("MIN_WEIGHT_THRESHOLD must be in [0.0, 1.0)")
+    if not -1.0 <= TOPIC_SIMILARITY_THRESHOLD <= 1.0:
+        raise ValueError(
+            "TOPIC_SIMILARITY_THRESHOLD is a cosine similarity and must be in [-1.0, 1.0]"
+        )
+    if not 0.0 <= LLM_TEMPERATURE <= 2.0:
+        raise ValueError("LLM_TEMPERATURE must be in [0.0, 2.0]")
+    if LLM_TIMEOUT_SECONDS <= 0 or EMBED_TIMEOUT_SECONDS <= 0:
+        raise ValueError(
+            "LLM_TIMEOUT_SECONDS and EMBED_TIMEOUT_SECONDS must be greater than 0"
+        )
+    if not 1 <= PORT <= 65535:
+        raise ValueError(f"PORT must be in 1..65535 — got {PORT}")
+    if QDRANT_MODE == "server" and not 1 <= QDRANT_PORT <= 65535:
+        raise ValueError(f"QDRANT_PORT must be in 1..65535 — got {QDRANT_PORT}")
+    if not CORS_ORIGINS:
+        raise ValueError("CORS_ORIGINS must name at least one origin, or be '*'")

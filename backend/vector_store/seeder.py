@@ -134,6 +134,8 @@ def seed_mentor_knowledge(force: bool = False) -> int:
 if __name__ == "__main__":
     import argparse
 
+    from backend import config
+
     logging.basicConfig(level=logging.INFO, format="[%(name)s] %(message)s")
     parser = argparse.ArgumentParser(description="Seed mentor knowledge into Qdrant.")
     parser.add_argument(
@@ -142,4 +144,8 @@ if __name__ == "__main__":
         help="drop the collection and re-embed every quote",
     )
     args = parser.parse_args()
+    # Writing a corpus under a bad EMBEDDING_DIM would build a collection the
+    # server then refuses to query, so check the environment before spending
+    # the embedding calls.
+    config.validate()
     seed_mentor_knowledge(force=args.force)
